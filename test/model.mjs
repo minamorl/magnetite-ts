@@ -52,6 +52,108 @@ function unit() {
  let ping=ready('server'); assert.equal(checked(ping,{type:'ping',socket:2}).state.pongDue,null); ping=checked(ping,{type:'ping',socket:1}).state; assert.equal(checked(ping,{type:'tick',now:1000}).effects[0].kind,'pong');
  assert.equal(checked(initial('client'),{type:'tick',now:30000}).effects[0].reason,'connect_failed');
 }
+// Frames are delivered only when the test drains the corresponding direction.
+function fixedNetwork(blocked, lostHandshake) {
+ let states=[ready('client'),ready('server')], queues=[[],[]], delivered=[[],[]], sent=[['c1','c2'],['s1','s2']];
+ function apply(side,event) {
+  const before=states[side]; let result=checked(before,event);
+  if(mutant==='fixed-retry-timeout' && event.type==='tick' && before.attemptUntil!==null && event.now>=before.attemptUntil) result={state:{...before,now:event.now},effects:[]};
+  states[side]=result.state;
+  if(mutant==='fixed-omit-resend' && event.type==='resume' && result.state.phase==='open') result.effects=result.effects.filter(x=>x.type!=='frame'||x.kind!=='data');
+  for(const effect of result.effects) {
+   if(effect.type==='frame') queues[side].push(effect);
+   if(effect.type==='deliver') delivered[side].push(effect.payload);
+   assert(effect.type!=='end' || effect.reason==='replaced','unexpected end');
+  }
+  return result;
+ }
+ function drain(allowed) {
+  while(queues.some(q=>q.length)) for(let side=0;side<2;side++) {
+   const frame=queues[side].shift(); if(!frame || !allowed(side,frame)) continue;
+   apply(1-side,{type:frame.kind,socket:frame.socket,seq:frame.seq,payload:frame.payload});
+  }
+ }
+ for(let side=0;side<2;side++) for(const payload of sent[side]) assert.equal(apply(side,{type:'send',payload}).effects[0].result,'accepted');
+ assert(states.every(s=>s.phase==='open' && s.record.pending.length===2));
+ drain(()=>false);
+ const lostAt=[null,null];
+ for(let now=1000;now<=61000 && lostAt.some(x=>x===null);now+=1000) {
+  for(let side=0;side<2;side++) if(states[side].phase==='open') {
+   const last=states[side].lastReceived, result=apply(side,{type:'tick',now});
+   if(result.state.phase==='disconnected') {
+    lostAt[side]=now;
+    assert(now-last>=30000 && now-last<31000,`side ${side}: loss at ${now}, last received ${last}`);
+    assert(result.effects.some(x=>x.type==='socket_close' && x.socket===1));
+   }
+  }
+  drain(side=>!blocked.includes(side));
+ }
+ assert(states.every(s=>s.phase==='disconnected'),'both ends detect loss independently');
+ assert(lostAt.every(x=>x!==null));
+ let socket=1;
+ function attempt(drop) {
+  socket++; const c=apply(0,{type:'attempt',socket});
+  assert.equal(c.state.attemptUntil,c.state.now+10000);
+  if(drop==='request') return;
+  const before=states[1], seq=before.record.received;
+  const response=apply(1,{type:'resume',socket,seq:states[0].record.received});
+  const transfer=response.effects.find(x=>x.type==='transfer');
+  if(transfer) {
+   const next=successor(before,transfer.record,socket); states[1]=next.state;
+   for(const effect of next.effects) if(effect.type==='frame') queues[1].push(effect);
+  }
+  assert.equal(states[1].phase,'open');
+  if(drop==='response') { queues=[[],[]]; return; }
+  apply(0,{type:'resume',socket,seq});
+ }
+ if(lostHandshake) {
+  attempt(lostHandshake);
+  const until=states[0].attemptUntil;
+  let result=apply(0,{type:'tick',now:until-1}); assert.equal(result.state.attemptUntil,until);
+  result=apply(0,{type:'tick',now:until});
+  assert.equal(result.state.phase,'disconnected'); assert.equal(result.state.attemptUntil,null);
+  assert(result.effects.some(x=>x.type==='retry'));
+ }
+ attempt(null);
+ assert(states.every(s=>s.phase==='open' && s.socket===socket));
+ drain(()=>true);
+ for(let side=0;side<2;side++) if(states[side].ackDue!==null) apply(side,{type:'tick',now:states[side].ackDue});
+ drain(()=>true);
+ for(let side=0;side<2;side++) {
+  assert.deepEqual(delivered[1-side],sent[side],'resume delivers each accepted message once in order');
+  assert.equal(states[side].record.pending.length,0,'resume clears pending acknowledgements');
+ }
+}
+function fixedHeartbeat() {
+ let states=[ready('client'),ready('server')];
+ function apply(side,event) {
+  const old=states[side]; let result=checked(old,event);
+  if(mutant==='fixed-pong-no-receipt' && event.type==='pong') result.state={...result.state,lastReceived:old.lastReceived};
+  states[side]=result.state;
+  assert.equal(result.state.phase,'open','heartbeat keeps both ends open');
+  assert(!result.effects.some(x=>x.type==='socket_close'||x.type==='end'),'heartbeat causes no loss or end');
+  return result.effects;
+ }
+ for(let time=15000;time+1000<=3600000;time+=16000) {
+  for(let side=0;side<2;side++) {
+   const effects=apply(side,{type:'tick',now:time});
+   assert(effects.some(x=>x.type==='frame' && x.kind==='ping' && x.at===time));
+  }
+  for(let side=0;side<2;side++) apply(side,{type:'ping',socket:1});
+  for(let side=0;side<2;side++) {
+   const effects=apply(side,{type:'tick',now:time+1000});
+   assert(effects.some(x=>x.type==='frame' && x.kind==='pong' && x.at===time+1000));
+  }
+  for(let side=0;side<2;side++) apply(side,{type:'pong',socket:1});
+ }
+ for(let side=0;side<2;side++) apply(side,{type:'tick',now:3600000});
+}
+function fixedTests() {
+ fixedNetwork([0,1],null);
+ for(const blocked of [[0],[1]]) for(const drop of ['request','response']) fixedNetwork(blocked,drop);
+ fixedHeartbeat();
+ console.log('PASS fixed: bidirectional silence, one-way silence and lost resume request/response, one-hour heartbeat');
+}
 function rng(seed) { let x=seed>>>0; return ()=>{x^=x<<13;x^=x>>>17;x^=x<<5;return x>>>0;}; }
 const coverage = new Map();
 function hit(key) { coverage.set(key,(coverage.get(key)||0)+1); }
@@ -156,7 +258,7 @@ function scenario(list, countCoverage=true) {
 }
 function fails(list, message) { try { scenario(list,false); return false; } catch(e) { return e.message===message; } }
 function minimize(list, message) { for(let i=0;i<list.length;) { const candidate=list.toSpliced(i,1); if(fails(candidate,message)) { list=candidate; i=0; } else i++; } return list; }
-if (!process.env.NET_ONLY) unit();
+if (!process.env.NET_ONLY) { unit(); fixedTests(); }
 const start=Number(process.argv[2] || 1), count=Number(process.argv[3] || 100000);
 for(let i=0;i<count;i++) { const seed=(start+i)>>>0 || 1, list=actions(seed); try { scenario(list); } catch(e) { const names=['send','frame deliver','frame loss','loss','tick','attempt','request','response','request loss','response loss','close','replace','unknown resume','new connect','silent fault']; console.error(`counterexample seed=${seed}\nminimized=${JSON.stringify(minimize(list,e.message).map(x=>({...x,op:names[x.op],side:x.side?'server':'client'})))}`); throw e; } }
 console.log(`PASS seed=${start} scenarios=${count} checks=配送・通知・保持・終端・ack・期限・送信ID`);
