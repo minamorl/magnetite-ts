@@ -38,7 +38,7 @@ const terminate = (s: State): Result => { const result=finish(s,'closed_by_calle
 const socketMatches = (s: State, socket: number) => s.socket !== null && s.socket === socket;
 const send: Handler<'send'> = (s,e) => {
  if (s.phase==='disconnected' && s.now>=s.expiry) return out(s,{type:'result',result:'not_open'});
- const rec=r(s); const seq=rec.sent+1; const bytes=new TextEncoder().encode(JSON.stringify({type:'data',seq,payload:e.payload})).length;
+ const rec=r(s); const seq=rec.sent+1; if(!Number.isSafeInteger(seq)) return out(s,{type:'result',result:'limit'}); const bytes=new TextEncoder().encode(JSON.stringify({type:'data',seq,payload:e.payload})).length;
  if(rec.pending.length>=s.maxCount || rec.pending.reduce((n,m)=>n+m.bytes,0)+bytes>s.maxBytes) return out(s,{type:'result',result:'limit'});
  const message={seq,payload:e.payload,bytes}; const record={...rec,sent:seq,pending:[...rec.pending,message]};
  return out({...s,record},{type:'result',result:'accepted',seq},...(s.phase==='open' && s.socket!==null?[{type:'frame',kind:'data',socket:s.socket,seq,payload:e.payload} as Effect]:[]));
@@ -50,6 +50,7 @@ const ack: Handler<'ack'> = (s,e) => {
 };
 const data: Handler<'data'> = (s,e) => {
  if(!socketMatches(s,e.socket)) return idle(s); const rec=r(s);
+ if(!Number.isSafeInteger(e.seq) || e.seq<1) return finish(s,'protocol_error');
  if(e.seq<=rec.received) return out({...s,ackDue:s.ackDue ?? s.now+1000});
  if(e.seq!==rec.received+1) return finish(s,'protocol_error');
  return out({...s,record:{...rec,received:e.seq},ackDue:s.ackDue ?? s.now+1000},{type:'deliver',seq:e.seq,payload:e.payload});

@@ -22,6 +22,12 @@ function checked(s,e) {
 }
 function ready(role) { const s=initial(role); return checked(s,{type:'ready',socket:1}).state; }
 function unit() {
+ const edgeFailures=[];
+ for(const [name,check] of [
+  ['send safe integer limit',()=>{ for(const phase of ['open','disconnected']) { let s=ready('client'); if(phase==='disconnected') s=checked(s,{type:'loss',socket:1}).state; s={...s,record:{...s.record,sent:Number.MAX_SAFE_INTEGER}}; const result=checked(s,{type:'send',payload:'x'}); assert.strictEqual(result.state,s); assert.deepEqual(result.effects,[{type:'result',result:'limit'}]); } }],
+  ['data invalid sequence',()=>{ for(const seq of [0,-1,1.5,NaN,Infinity,Number.MAX_SAFE_INTEGER+1]) { let s=ready('server'); s=checked(s,{type:'send',payload:'pending'}).state; const result=checked(s,{type:'data',socket:1,seq,payload:'x'}); assert.equal(result.state.phase,'closed',`seq=${seq}`); assert.deepEqual(result.effects,[{type:'end',reason:'protocol_error',count:1}]); assert.deepEqual(checked(s,{type:'data',socket:2,seq,payload:'x'}),{state:s,effects:[]}); } }],
+ ]) { try { check(); } catch(e) { edgeFailures.push(`${name}: ${e.message}`); } }
+ assert.deepEqual(edgeFailures,[],'sequence boundary regressions');
  let s=ready('client'); s={...s,maxCount:1}; s=checked(s,{type:'send',payload:'a'}).state; checked(s,{type:'send',payload:'b'});
  const closed=checked(s,{type:'close'}).state; checked(closed,{type:'send',payload:'x'}); checked(closed,{type:'close'});
  let recv=ready('server'); recv=checked(recv,{type:'data',socket:1,seq:1,payload:'x'}).state; checked(recv,{type:'tick',now:1000});
