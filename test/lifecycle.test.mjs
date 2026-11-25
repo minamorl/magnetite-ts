@@ -82,7 +82,13 @@ const cases = {
   }
 };
 for (const [state,events] of Object.entries(cases)) for (const [name,check] of Object.entries(events)) {
-  test(`magnetite.lifecycle.${state}.${name}`,()=>{const c=setup(state);check(c,c.dispatch(event[name]));});
+  test(`magnetite.lifecycle.${state}.${name}`,()=>{
+    const c=setup(state);
+    if(state==='disconnected'&&['loss','reject','peerClose'].includes(name)){
+      c.dispatch({type:'attempt',socket:'n'});
+      check(c,c.dispatch({...event[name],socket:'n'}));
+    } else check(c,c.dispatch(event[name]));
+  });
 }
 
 test('server noIdentifier in every state creates a new connection',()=>{

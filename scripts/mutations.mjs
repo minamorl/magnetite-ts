@@ -16,7 +16,10 @@ const mutations=[
   ['no count limit',"this.record.pending.length>=this.maxCount","false"],
   ['attempt timeout late',"else if(this.state==='disconnected'){if(this.attemptUntil!==undefined&&this.now>=this.attemptUntil)","else if(this.state==='disconnected'){if(this.attemptUntil!==undefined&&this.now>this.attemptUntil)"],
   ['wrong terminal count',"const n=this.record.pending.length;","const n=0;"],
-  ['no transfer',"effects.push({type:'transfer',record:copy(this.record)});","void 0;"]
+  ['no transfer',"effects.push({type:'transfer',record:copy(this.record)});","void 0;"],
+  ['lost socket remains current',"if(this.socket!==undefined)this.retired.add(this.socket);this.socket=undefined;this.ackAt=undefined;this.pongAt=undefined;this.attemptUntil=undefined;if(this.role==='client')","this.ackAt=undefined;this.pongAt=undefined;this.attemptUntil=undefined;if(this.role==='client')"],
+  ['attempt timeout does not close',"e.push({type:'closeSocket',socket});","void 0;"],
+  ['close retains ack and pong deadlines',"this.ackAt=undefined; this.pongAt=undefined; this.record=","this.record="]
 ];
 let failed=0;
 try {
@@ -25,7 +28,7 @@ try {
     writeFileSync(file,original.replace(from,to));
     const build=spawnSync('npm',['run','build'],{encoding:'utf8'});
     if(build.status!==0){console.log(`INVALID ${name}: compilation failed`);failed++;continue;}
-    const run=spawnSync('node',['--test','test/lifecycle.test.mjs','test/network.test.mjs'],{encoding:'utf8'});
+    const run=spawnSync('node',['--test','test/lifecycle.test.mjs','test/network.test.mjs','test/v14.test.mjs'],{encoding:'utf8'});
     const killed=run.status!==0&&run.signal===null;
     console.log(`${killed?'KILLED':'SURVIVED'} ${name}`);
     if(!killed)failed++;
