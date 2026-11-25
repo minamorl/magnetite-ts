@@ -159,6 +159,29 @@ function fixedHeartbeat() {
  }
  for(let side=0;side<2;side++) apply(side,{type:'tick',now:3600000});
 }
+function fixedTimeoutAndClose() {
+ const cases=[
+  ['attempt timeout retries after socket close',()=>{
+   let s=ready('client'); s=checked(s,{type:'loss',socket:1}).state; s=checked(s,{type:'attempt',socket:2}).state;
+   const result=checked(s,{type:'tick',now:10000});
+   assert.deepEqual(result.effects,[{type:'socket_close',socket:2},{type:'retry'}]);
+   assert.equal(result.state.socket,null); assert.equal(result.state.attemptUntil,null);
+  }],
+  ['attempt timeout expires after socket close',()=>{
+   let s={...ready('client'),expiryDuration:5000}; s=checked(s,{type:'loss',socket:1}).state; s=checked(s,{type:'attempt',socket:2}).state;
+   const result=checked(s,{type:'tick',now:10000});
+   assert.deepEqual(result.effects,[{type:'socket_close',socket:2},{type:'end',reason:'expired',count:0}]);
+   assert.equal(result.state.phase,'closed');
+  }],
+  ['closing clears scheduled pong',()=>{
+   let s=ready('server'); s=checked(s,{type:'ping',socket:1}).state; assert.equal(s.pongDue,1000);
+   assert.equal(checked(s,{type:'close'}).state.pongDue,null);
+  }],
+ ];
+ const failures=[];
+ for(const [name,check] of cases) { try { check(); console.log(`PASS fixed: ${name}`); } catch(e) { console.error(`FAIL fixed: ${name}\n${e.message}`); failures.push(name); } }
+ assert.deepEqual(failures,[],'fixed timeout and close regressions');
+}
 function fixedTests() {
  fixedNetwork([0,1],null);
  for(const blocked of [[0],[1]]) for(const drop of ['request','response']) fixedNetwork(blocked,drop);
@@ -269,7 +292,7 @@ function scenario(list, countCoverage=true) {
 }
 function fails(list, message) { try { scenario(list,false); return false; } catch(e) { return e.message===message; } }
 function minimize(list, message) { for(let i=0;i<list.length;) { const candidate=list.toSpliced(i,1); if(fails(candidate,message)) { list=candidate; i=0; } else i++; } return list; }
-if (!process.env.NET_ONLY) { unit(); fixedTests(); }
+if (!process.env.NET_ONLY) { fixedTimeoutAndClose(); unit(); fixedTests(); }
 const start=Number(process.argv[2] || 1), count=Number(process.argv[3] || 100000);
 for(let i=0;i<count;i++) { const seed=(start+i)>>>0 || 1, list=actions(seed); try { scenario(list); } catch(e) { const names=['send','frame deliver','frame loss','loss','tick','attempt','request','response','request loss','response loss','close','replace','unknown resume','new connect','silent fault']; console.error(`counterexample seed=${seed}\nminimized=${JSON.stringify(minimize(list,e.message).map(x=>({...x,op:names[x.op],side:x.side?'server':'client'})))}`); throw e; } }
 console.log(`PASS seed=${start} scenarios=${count} checks=配送・通知・保持・終端・ack・期限・送信ID`);

@@ -35,7 +35,7 @@ const out = (s: State, ...effects: Effect[]): Result => ({state:s,effects});
 const r = (s: State): RecordState => { if (!s.record) throw new Error('missing identity record'); return s.record; };
 const finish = (s: State, reason: Extract<Effect,{type:'end'}>['reason']): Result => {
  const rec=s.record; const end: Effect = reason === 'replaced' ? {type:'end',reason} : {type:'end',reason,count:rec?.pending.length ?? 0};
- return out({...s,phase:'closed',record:null,socket:null,attemptUntil:null,ackDue:null}, ...(reason==='replaced' && rec ? [{type:'transfer',record:rec} as Effect] : []),end);
+ return out({...s,phase:'closed',record:null,socket:null,attemptUntil:null,ackDue:null,pongDue:null}, ...(reason==='replaced' && rec ? [{type:'transfer',record:rec} as Effect] : []),end);
 };
 const terminate = (s: State): Result => { const result=finish(s,'closed_by_caller'); return out(result.state,...(s.socket===null?[]:[{type:'frame',kind:'close',socket:s.socket} as Effect]),...result.effects,{type:'result',result:'ok'}); };
 const socketMatches = (s: State, socket: number) => s.socket !== null && s.socket === socket;
@@ -72,7 +72,7 @@ const resume: Handler<'resume'> = (s,e) => {
 const tick: Handler<'tick'> = (s,e) => {
  if(e.now<s.now) throw new Error('clock moved backwards'); const t={...s,now:e.now};
  if(t.phase==='disconnected') {
-  if(t.attemptUntil!==null && t.now>=t.attemptUntil) { const n={...t,socket:null,attemptUntil:null}; return t.now>=t.expiry?finish(n,'expired'):out(n,{type:'retry'}); }
+  if(t.attemptUntil!==null && t.now>=t.attemptUntil) { const n={...t,socket:null,attemptUntil:null}; const result=t.now>=t.expiry?finish(n,'expired'):out(n,{type:'retry'}); return out(result.state,...(t.socket===null?[]:[{type:'socket_close',socket:t.socket} as Effect]),...result.effects); }
   if(t.now>=t.expiry && t.attemptUntil===null) return finish(t,'expired');
  }
  if(t.phase==='preparing' && t.now-t.lastReceived>=t.lossAfter) return finish(t,'connect_failed');
@@ -106,7 +106,7 @@ const matrix = {
   ready:ignore,send:{description:'期限前は枠内で受理、期限後 not_open',run:send},ack:ignore,data:ignore,ping:ignore,pong:ignore,loss:{description:'試行だけ終了し再試行、期限後は expired',run:disconnectedLoss},attempt:{description:'client の再開試行開始、10 秒待つ',run:attempt},
   resume:{description:'有効なら開き累積 ack と再送、期限境界を判定',run:resume},reject:{description:'client は resume_rejected',run:(s,e)=>s.role==='client' && socketMatches(s,e.socket)?finish(s,'resume_rejected'):idle(s)},
   expiry:{description:'待機中は応答または 10 秒まで保持',run:s=>tick(s,{type:'tick',now:Math.max(s.now,s.expiry)})},close:{description:'closed_by_caller',run:terminate},peerClose:{description:'現在の socket なら peer_closed',run:(s,e)=>socketMatches(s,e.socket)?finish(s,'peer_closed'):idle(s)},replace:ignore,
-  noIdentifier:{description:'server は別の新規接続、旧記録を維持',run:s=>s.role==='server'?out(s,{type:'new_connection'}):idle(s)},tick:{description:'10 秒または期限を判定',run:tick}
+  noIdentifier:{description:'server は別の新規接続、旧記録を維持',run:s=>s.role==='server'?out(s,{type:'new_connection'}):idle(s)},tick:{description:'10 秒で試行 socket を閉じて再試行または満了、待機中は期限で満了',run:tick}
  },
  closed: {
   ready:ignore,send:{description:'closed',run:s=>out(s,{type:'result',result:'closed'})},ack:ignore,data:ignore,ping:ignore,pong:ignore,loss:ignore,attempt:ignore,resume:{description:'server は未知の識別子として拒否',run:(s,e)=>s.role==='server'?out(s,{type:'resume_reject',socket:e.socket,reason:'unknown_identifier'}):idle(s)},reject:ignore,expiry:ignore,
