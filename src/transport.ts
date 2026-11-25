@@ -22,7 +22,7 @@ export interface Callbacks {
   onEnd?:(notice:{reason:EndReason;unacked?:number})=>void;
 }
 export interface Timing { clock?:Clock; tickInterval?:number; expiryAfter?:number; pingAfter?:number; lossAfter?:number; maxCount?:number; maxBytes?:number }
-export type Wire = Frame | {type:'hello';identifier?:string;seq?:number} | {type:'welcome';identifier:string;seq:number;resumed:boolean} | {type:'reject';reason:string};
+export type Wire = Frame | {type:'hello';identifier?:string;seq?:number} | {type:'ready'} | {type:'welcome';identifier:string;seq:number;resumed:boolean} | {type:'reject';reason:string};
 export function parseWire(data:unknown):Wire|undefined {
   if(typeof data!=='string')return undefined;
   try {const v:unknown=JSON.parse(data);if(!v||typeof v!=='object'||typeof (v as {type?:unknown}).type!=='string')return undefined;return v as Wire;}catch{return undefined;}
@@ -70,16 +70,22 @@ export abstract class Endpoint {
     this.timer=this.clock.setTimeout(()=>{this.timer=undefined;this.advance();this.runTimer();},this.interval);
   }
   protected stopTimer():void {if(this.timer!==undefined){this.clock.clearTimeout(this.timer);this.timer=undefined;}for(const timer of this.deadlines)this.clock.clearTimeout(timer);this.deadlines.clear();for(const timer of this.liveness)this.clock.clearTimeout(timer);this.liveness.clear();}
-  private scheduleLiveness():void {
+  protected scheduleLiveness():void {
     for(const timer of this.liveness)this.clock.clearTimeout(timer);this.liveness.clear();
     for(const delay of (this.state==='open'?[this.pingAfter,this.lossAfter]:[this.lossAfter])){
       const timer=this.clock.setTimeout(()=>{this.liveness.delete(timer);if(this.state==='open'||this.state==='preparing')this.advance();},delay);
       this.liveness.add(timer);
     }
   }
-  protected dispatch(event:Event):Result {const r=this.core.dispatch(event);this.process(r);return r;}
+  protected dispatch(event:Event):Result {
+    const receipt=this.core.state==='open'&&'socket' in event&&event.socket===this.core.socket&&['ready','ack','data','ping','pong','resume','reject','peerClose'].includes(event.type);
+    const r=this.core.dispatch(event);this.process(r);
+    if(receipt&&this.core.state==='open')this.scheduleLiveness();
+    return r;
+  }
   protected receive(id:string,frame:Wire):void {
-    if(frame.type==='data')this.dispatch({type:'data',socket:id,seq:frame.seq,data:frame.data});
+    if(frame.type==='ready')this.dispatch({type:'ready',socket:id});
+    else if(frame.type==='data')this.dispatch({type:'data',socket:id,seq:frame.seq,data:frame.data});
     else if(frame.type==='ack')this.dispatch({type:'ack',socket:id,seq:frame.seq});
     else if(frame.type==='ping'||frame.type==='pong')this.dispatch({type:frame.type,socket:id});
     else if(frame.type==='close')this.dispatch({type:'peerClose',socket:id});

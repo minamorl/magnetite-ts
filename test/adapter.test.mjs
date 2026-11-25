@@ -43,7 +43,7 @@ function fixture(extra={}) {
   const makeServer=()=>new Server({...timing,randomBytes:n=>new Uint8Array(n).fill(7),onConnection:c=>{connections.push(c);c.setCallbacks({onReceive:(data)=>serverReceived.push(data),onEnd:n=>serverEnds.push(n)});}});
   let server=makeServer();
   const socketFactory=()=>{const a=new FakeSocket(clock),b=new FakeSocket(clock);a.peer=b;b.peer=a;pairs.push([a,b]);const send=b.send.bind(b);b.send=data=>{const frame=JSON.parse(data);if(dropReply&&frame.type==='welcome'&&frame.resumed){dropReply=false;return;}send(data);};server.accept(b);clock.setTimeout(()=>{if(stalled)return;if(disabled)a.close();else{a.readyState=1;b.readyState=1;a.emit('open');}},0);return a;};
-  const client=new Client('ws://example',{...timing,socketFactory,retryInitial:10,retryMax:20,random:()=>0,onReceive:data=>clientReceived.push(data),onState:s=>{states.push(s);stateAction(s);},onEnd:n=>ends.push(n)});
+  const client=new Client('ws://example',{...timing,socketFactory,retryInitial:extra.retryInitial??10,retryMax:extra.retryMax??20,random:extra.random??(()=>0),onReceive:data=>clientReceived.push(data),onState:s=>{states.push(s);stateAction(s);},onEnd:n=>ends.push(n)});
   client.connect();clock.advance(0);
   return {clock,client,server,connections,pairs,serverReceived,clientReceived,ends,states,serverEnds,restart:()=>{server=makeServer();},disable:()=>{disabled=true;},stall:()=>{stalled=true;},dropResumeReply:()=>{dropReply=true;},onState:fn=>{stateAction=fn;}};
 }
@@ -182,4 +182,82 @@ test('injected sockets: resume of active server replaces old connection',()=>{
   assert.equal(f.connections[0].state,'closed');assert.equal(f.connections[1].state,'open');
   assert.equal(messages[0].type,'welcome');assert.equal(messages[0].resumed,true);
   assert.ok(f.serverEnds.some(n=>n.reason==='replaced'));a.close();f.client.close();f.clock.advance(0);
+});
+test('v1.5 server waits for ready and refuses sends until ready',()=>{
+  const clock=new Clock(),a=new FakeSocket(clock),b=new FakeSocket(clock),connections=[];
+  a.peer=b;b.peer=a;a.readyState=b.readyState=1;
+  const server=new Server({clock,randomBytes:n=>new Uint8Array(n),onConnection:c=>connections.push(c)});
+  server.accept(b);a.send(JSON.stringify({type:'hello'}));clock.advance(0);
+  assert.equal(connections[0].state,'preparing');assert.equal(connections[0].send('x').result,'not_open');
+  a.send(JSON.stringify({type:'ready'}));clock.advance(0);assert.equal(connections[0].state,'open');
+  connections[0].close();clock.advance(0);
+});
+test('v1.5 client sends ready before opening',()=>{
+  const f=preparing();f.b.send(JSON.stringify({type:'welcome',identifier:'id',seq:0,resumed:false}));
+  f.clock.advance(0);assert.equal(f.client.state,'open');assert.equal(f.a.sent.at(-1).type,'ready');
+  f.client.close();f.clock.advance(0);
+});
+test('v1.5 client deadline starts at request and not socket creation',()=>{
+  const clock=new Clock(),a=new FakeSocket(clock),b=new FakeSocket(clock),ends=[];
+  a.peer=b;b.peer=a;
+  const c=new Client('ws://example',{clock,lossAfter:80,tickInterval:5,socketFactory:()=>a,onEnd:n=>ends.push(n)});
+  c.connect();clock.advance(100);assert.equal(c.state,'preparing');
+  a.readyState=b.readyState=1;a.emit('open');clock.advance(79);assert.equal(c.state,'preparing');
+  clock.advance(1);assert.deepEqual(ends,[{reason:'connect_failed',unacked:0}]);
+});
+test('v1.5 server preparation deadline does not move on handshake frames',()=>{
+  const clock=new Clock(),a=new FakeSocket(clock),b=new FakeSocket(clock),connections=[],ends=[];
+  a.peer=b;b.peer=a;a.readyState=b.readyState=1;
+  const server=new Server({clock,lossAfter:80,tickInterval:5,randomBytes:n=>new Uint8Array(n),onConnection:c=>{connections.push(c);c.setCallbacks({onEnd:n=>ends.push(n)});}});
+  server.accept(b);a.send(JSON.stringify({type:'hello'}));clock.advance(0);
+  clock.advance(70);a.send(JSON.stringify({type:'ping'}));clock.advance(10);
+  assert.equal(connections[0].state,'closed');assert.deepEqual(ends,[{reason:'connect_failed',unacked:0}]);
+});
+test('v1.5 resume reply precedes replaced notification and successor effects',()=>{
+  const f=fixture(),a=new FakeSocket(f.clock),b=new FakeSocket(f.clock),order=[];
+  a.peer=b;b.peer=a;a.readyState=b.readyState=1;f.server.accept(b);
+  const send=b.send.bind(b);b.send=data=>{order.push(JSON.parse(data).type);send(data);};
+  f.connections[0].setCallbacks({onEnd:()=>order.push('ended')});
+  a.send(JSON.stringify({type:'hello',identifier:f.connections[0].identifier,seq:0}));f.clock.advance(0);
+  assert.deepEqual(order.slice(0,2),['welcome','ended']);
+  f.client.close();a.close();f.clock.advance(0);
+});
+test('v1.5 preparing server ignores resume instead of accepting it',()=>{
+  const clock=new Clock(),a=new FakeSocket(clock),b=new FakeSocket(clock),connections=[];
+  a.peer=b;b.peer=a;a.readyState=b.readyState=1;
+  const server=new Server({clock,randomBytes:n=>new Uint8Array(n),onConnection:c=>connections.push(c)});
+  server.accept(b);a.send(JSON.stringify({type:'hello'}));clock.advance(0);
+  const x=new FakeSocket(clock),y=new FakeSocket(clock),messages=[];x.peer=y;y.peer=x;x.readyState=y.readyState=1;
+  x.addEventListener('message',e=>messages.push(JSON.parse(e.data)));server.accept(y);
+  x.send(JSON.stringify({type:'hello',identifier:connections[0].identifier,seq:0}));clock.advance(0);
+  assert.deepEqual(messages,[]);assert.equal(connections[0].state,'preparing');connections[0].close();clock.advance(0);
+});
+test('v1.5 retry uses injected nonzero jitter without passing cap',()=>{
+  const f=fixture({random:()=>1});f.disable();f.pairs[0][0].close();f.clock.advance(0);f.clock.advance(55);
+  assert.deepEqual(f.pairs.slice(1,4).map(pair=>pair[0].createdAt),[11,31,51]);
+  f.client.close();f.clock.advance(0);
+});
+test('v1.5 retry never exceeds ten seconds even when configured cap is larger',()=>{
+  const f=fixture({retryInitial:8000,retryMax:20000,expiryAfter:100000,tickInterval:100,random:()=>1});
+  f.disable();f.pairs[0][0].close();f.clock.advance(0);f.clock.advance(30000);
+  assert.deepEqual(f.pairs.slice(1,4).map(pair=>pair[0].createdAt),[8800,18800,28800]);
+  f.client.close();f.clock.advance(0);
+});
+test('v1.5 invalid resume on current socket only rejects and refreshes liveness',()=>{
+  const f=fixture({tickInterval:5,pingAfter:40,lossAfter:200});
+  f.clock.advance(30);const before=f.serverEnds.length;
+  f.pairs[0][0].send(JSON.stringify({type:'hello',identifier:f.connections[0].identifier,seq:99}));f.clock.advance(0);
+  assert.equal(f.connections[0].state,'open');assert.equal(f.serverEnds.length,before);
+  assert.equal(f.pairs[0][1].sent.at(-1).type,'reject');f.clock.advance(11);
+  assert.equal(f.pairs[0][1].sent.some(x=>x.type==='ping'),false);
+  f.client.close();f.clock.advance(0);
+});
+test('v1.5 successful resume on current socket replies before replacement',()=>{
+  const f=fixture(),order=[],serverSocket=f.pairs[0][1],send=serverSocket.send.bind(serverSocket);
+  serverSocket.send=data=>{order.push(JSON.parse(data).type);send(data);};
+  f.connections[0].setCallbacks({onEnd:()=>order.push('ended')});
+  f.pairs[0][0].send(JSON.stringify({type:'hello',identifier:f.connections[0].identifier,seq:0}));
+  f.clock.advance(0);assert.deepEqual(order.slice(0,2),['welcome','ended']);
+  assert.equal(serverSocket.readyState,1);assert.equal(f.connections[1].state,'open');
+  f.client.close();f.clock.advance(0);
 });

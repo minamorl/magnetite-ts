@@ -15,6 +15,7 @@ export class Client extends Endpoint {
   private retryTimer?:unknown;
   private attemptTimer?:unknown;
   private started=false;
+  private requested=false;
   constructor(url:string,options:ClientOptions={}) {
     const clock=options.clock??systemClock;
     super(new Core({role:'client',identifier:'',now:clock.now(),...options}),options,options);
@@ -22,11 +23,12 @@ export class Client extends Endpoint {
   }
   connect():void {
     if(this.started)return;
-    this.started=true;this.callbacks.onState?.('preparing');this.runTimer();this.dial();
+    this.started=true;this.callbacks.onState?.('preparing');this.dial();
   }
+  protected override advance():void {if(this.state==='preparing'&&!this.requested)return;super.advance();}
   protected retry():void {
     if(this.retryTimer!==undefined||this.state!=='disconnected')return;
-    const maximum=this.options.retryMax??10000;
+    const maximum=Math.min(10000,this.options.retryMax??10000);
     const base=Math.min(maximum,(this.options.retryInitial??500)*2**Math.min(this.retries++,30));
     const random=this.options.random??Math.random;
     const delay=base+(Math.min(maximum,base*1.1)-base)*Math.max(0,Math.min(1,random()));
@@ -46,15 +48,24 @@ export class Client extends Endpoint {
     socket.addEventListener('open',()=>{
       if(this.core.socket!==id)return;
       const hello:Wire=this.state==='preparing'?{type:'hello'}:{type:'hello',identifier:this.core.record.identifier,seq:this.core.record.received};
-      try{socket.send(JSON.stringify(hello));}catch{this.dispatch({type:'loss',socket:id});}
+      try{
+        if(this.state==='preparing'){this.core.beginPreparing(this.clock.now());this.requested=true;}
+        socket.send(JSON.stringify(hello));
+        this.runTimer();
+      }catch{this.dispatch({type:'loss',socket:id});}
     });
     socket.addEventListener('message',(event:any)=>{
       if(this.core.socket!==id)return;
       this.advance();if(this.core.socket!==id)return;
       const frame=parseWire(event.data);if(!frame)return;
       if(frame.type==='welcome'){
-        if(this.state==='preparing'&&!frame.resumed){this.core.record.identifier=frame.identifier;this.retries=0;this.dispatch({type:'ready',socket:id});}
+        if(this.state==='preparing'&&!frame.resumed){
+          this.core.record.identifier=frame.identifier;
+          try{socket.send(JSON.stringify({type:'ready'}));}catch{this.dispatch({type:'loss',socket:id});return;}
+          this.retries=0;this.dispatch({type:'ready',socket:id});
+        }
         else if(this.state==='disconnected'&&frame.resumed){this.clearAttemptTimer();this.retries=0;this.dispatch({type:'resume',socket:id,seq:frame.seq});}
+        else if(this.state==='open')this.dispatch({type:'ready',socket:id});
       }else if(frame.type==='reject'){this.clearAttemptTimer();this.dispatch({type:'reject',socket:id});}
       else this.receive(id,frame);
     });

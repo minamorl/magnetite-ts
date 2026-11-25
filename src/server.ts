@@ -19,11 +19,17 @@ export class ServerConnection extends Endpoint {
   }
   attach(id:string,socket:SocketLike):void {this.sockets.set(id,socket);this.runTimer();}
   initial(id:string):void {this.dispatch({type:'ready',socket:id});}
-  resume(id:string,seq:number):Result {return this.core.dispatch({type:'resume',socket:id,seq});}
+  resume(id:string,seq:number):Result {const result=this.core.dispatch({type:'resume',socket:id,seq});if(this.state==='open'&&this.core.socket===id)this.scheduleLiveness();return result;}
+  detach(id:string):void {this.sockets.delete(id);}
   sync():void {this.advance();}
   apply(result:Result):void {this.process(result);}
   get received():number{return this.core.record.received;}
-  frame(id:string,frame:Parameters<Endpoint['receive']>[1]):void {this.advance();this.receive(id,frame);}
+  validSequence(seq:number):boolean {return Number.isSafeInteger(seq)&&seq>=0&&seq<=this.core.record.sent;}
+  frame(id:string,frame:Parameters<Endpoint['receive']>[1]):void {
+    this.advance();
+    if(frame.type==='ready'&&this.core.state==='preparing'&&this.core.socket===id)this.initial(id);
+    else this.receive(id,frame);
+  }
   loss(id:string):void {
     this.sockets.delete(id);
     if(this.core.socket===id){this.advance();const before=this.state;this.dispatch({type:'loss',socket:id});if(before==='open'&&this.state==='disconnected')this.callbacks.onState?.('disconnected');}
@@ -42,7 +48,7 @@ export class Server {
     const send=(frame:unknown)=>{if(socket.readyState===1)socket.send(JSON.stringify(frame));};
     socket.addEventListener('message',(event:any)=>{
       const frame=parseWire(event.data);if(!frame)return;
-      if(!session) {
+      if(!session||(frame.type==='hello'&&frame.identifier!==undefined)) {
         if(frame.type!=='hello')return;
         if(frame.identifier===undefined){
           const clock=this.options.clock??systemClock;
@@ -51,27 +57,36 @@ export class Server {
           const core=new Core({role:'server',identifier,now:clock.now(),socket:id,...this.options});
           session=this.create(core);session.attach(id,socket);
           send({type:'welcome',identifier,seq:0,resumed:false});
-          this.options.onConnection?.(session);session.initial(id);
+          this.options.onConnection?.(session);
         }else {
           const prior=this.sessions.get(frame.identifier);
           if(!prior){send({type:'reject',reason:'unknown_identifier'});return;}
           prior.sync();
           if(prior.state==='closed'){send({type:'reject',reason:'unknown_identifier'});return;}
           const seq=frame.seq??NaN;const received=prior.received;
+          if(prior.state==='preparing')return;
+          if(!prior.validSequence(seq)){
+            const result=prior.resume(id,seq);
+            const reject=result.effects.find(e=>e.type==='reject');
+            prior.apply(result);
+            if(reject&&reject.type==='reject')send({type:'reject',reason:reject.reason});
+            return;
+          }
+          send({type:'welcome',identifier:prior.identifier,seq:received,resumed:true});
           const result=prior.resume(id,seq);
           const reject=result.effects.find(e=>e.type==='reject');
           if(reject&&reject.type==='reject'){prior.apply(result);send({type:'reject',reason:reject.reason});return;}
           const transfer=result.effects.find(e=>e.type==='transfer');
           if(transfer&&transfer.type==='transfer'){
+            if(session===prior)prior.detach(id);
             prior.apply(result);
             const clock=this.options.clock??systemClock;
             const core=new Core({role:'server',identifier:transfer.record.identifier,record:transfer.record,now:clock.now(),socket:id,successor:true,...this.options});
             session=this.create(core);session.attach(id,socket);
-            send({type:'welcome',identifier:session.identifier,seq:received,resumed:true});
             session.successorEffects();this.options.onConnection?.(session);session.announceOpen();
           }else {
             session=prior;session.attach(id,socket);
-            send({type:'welcome',identifier:session.identifier,seq:received,resumed:true});session.apply(result);
+            session.apply(result);
           }
         }
       }else session.frame(id,frame);

@@ -8,7 +8,12 @@ const mutations=[
   ['client.ts','ignore resume rejection',"this.dispatch({type:'reject',socket:id});","void 0;"],
   ['transport.ts','no liveness deadline',"if(this.state==='open'||this.state==='preparing')this.advance();","void 0;"],
   ['server.ts','no initial welcome',"send({type:'welcome',identifier,seq:0,resumed:false});","void 0;"],
-  ['server.ts','no resume welcome',"send({type:'welcome',identifier:session.identifier,seq:received,resumed:true});session.apply(result);","session.apply(result);"]
+  ['server.ts','no resume welcome',"send({type:'welcome',identifier:prior.identifier,seq:received,resumed:true});","void 0;"],
+  ['server.ts','opens before ready',"this.options.onConnection?.(session);\n        }else {","this.options.onConnection?.(session);session.initial(id);\n        }else {"],
+  ['server.ts','resume effect before reply',"send({type:'welcome',identifier:prior.identifier,seq:received,resumed:true});\n          const result=prior.resume(id,seq);","const result=prior.resume(id,seq);prior.apply(result);\n          send({type:'welcome',identifier:prior.identifier,seq:received,resumed:true});"],
+  ['server.ts','preparing frame extends deadline',"this.advance();\n    if(frame.type==='ready'","this.advance();\n    if(this.state==='preparing')this.core.beginPreparing(this.clock.now());\n    if(frame.type==='ready'"],
+  ['client.ts','retry without jitter',"const delay=base+(Math.min(maximum,base*1.1)-base)*Math.max(0,Math.min(1,random()));","const delay=base;"],
+  ['client.ts','retry exceeds ten seconds',"const maximum=Math.min(10000,this.options.retryMax??10000);","const maximum=this.options.retryMax??10000;"]
 ];
 let failed=0;
 for(const [name,label,from,to] of mutations){

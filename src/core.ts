@@ -30,6 +30,7 @@ export class Core {
     this.record=o.record?copy(o.record):{identifier:o.identifier,sent:0,received:0,acknowledged:0,pending:[]};
     this.state=o.successor?'open':'preparing';
   }
+  beginPreparing(now:number):void {if(this.state==='preparing'){if(now<this.now)throw new RangeError('clock moved backwards');this.now=now;this.since=now;}}
   successorEffects():Effect[] { if(this.state!=='open'||!this.socket) return []; return [{type:'connected'},...this.record.pending.map(p=>this.frame(this.socket!,{type:'data',seq:p.seq,data:p.data},this.now))]; }
   private frame(socket:string,frame:Frame,at:number):Effect {return {type:'frame',socket,frame,at};}
   private terminal(reason:EndReason,effects:Effect[],replaced=false) { if(this.state==='closed') return; const n=this.record.pending.length; this.state='closed'; if(this.socket!==undefined)this.retired.add(this.socket); this.socket=undefined; this.attemptUntil=undefined; this.ackAt=undefined; this.pongAt=undefined; this.record={identifier:'',sent:0,received:0,acknowledged:0,pending:[]}; effects.push(replaced?{type:'ended',reason}:{type:'ended',reason,unacked:n}); }
@@ -44,7 +45,7 @@ export class Core {
     if('socket' in event&&this.retired.has(event.socket))return out;
     if(event.type==='tick') {if(event.now<this.now){out.result='error';return out;} this.now=event.now;}
     if(event.type==='expiry'&&this.state==='disconnected')this.now=Math.max(this.now,this.deadline,event.now);
-    if(this.state==='open' && 'socket' in event && event.socket===this.socket && ['ack','data','ping','pong','resume','reject','peerClose'].includes(event.type)){this.since=this.now;this.pingSent=false;}
+    if(this.state==='open' && 'socket' in event && event.socket===this.socket && ['ready','ack','data','ping','pong','resume','reject','peerClose'].includes(event.type)){this.since=this.now;this.pingSent=false;}
     if(event.type==='send') {
       if(this.state==='closed'){out.result='closed';return out;}
       if(this.state==='preparing'||(this.state==='disconnected'&&this.now>=this.deadline)){out.result='not_open';return out;}
