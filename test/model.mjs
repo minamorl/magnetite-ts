@@ -45,6 +45,17 @@ function unit() {
  let z=ready('client'); z=checked(z,{type:'send',payload:'x'}).state; z=checked(z,{type:'loss',socket:1}).state; z=checked(z,{type:'ack',socket:1,seq:1}).state; assert.equal(z.record.pending.length,1); z=checked(z,{type:'attempt',socket:2}).state; z=checked(z,{type:'ack',socket:2,seq:1}).state; assert.equal(z.record.pending.length,1); z=checked(z,{type:'loss',socket:2}).state; assert.equal(z.attemptUntil,null);
  let p=ready('server'); p=checked(p,{type:'send',payload:'x'}).state; const replacement=checked(p,{type:'replace'}); assert.equal(replacement.effects.find(x=>x.type==='transfer').record.pending.length,1); assert.equal(replacement.effects.find(x=>x.type==='end').reason,'replaced'); assert.equal(replacement.effects.find(x=>x.type==='end').count,undefined);
  let old=ready('server'); const invalid=checked(old,{type:'resume',socket:2,seq:1}); assert.equal(invalid.state.phase,'open'); assert.equal(invalid.effects[0].reason,'invalid_sequence'); const valid=checked(old,{type:'resume',socket:2,seq:0}); assert.equal(valid.state.phase,'closed'); assert.equal(valid.effects.find(e=>e.type==='end').reason,'replaced'); assert(valid.effects.some(e=>e.type==='transfer'));
+ for(const role of ['client','server']) for(const event of [{type:'resume',seq:1},{type:'reject'}]) {
+  const current=checked(ready(role),{type:'tick',now:15000}).state;
+  const stale=checked(current,{...event,socket:2});
+  if(event.type==='reject' || role==='client') assert.strictEqual(stale.state,current);
+  const received=checked(current,{...event,socket:1});
+  assert.equal(received.state.lastReceived,15000,`${role} ${event.type} resets lastReceived`);
+  assert.equal(received.state.pingSent,false,`${role} ${event.type} resets pingSent`);
+  if(event.type==='resume' && role==='server') assert.deepEqual(received.effects,[{type:'resume_reject',socket:1,reason:'invalid_sequence'}]);
+  else assert.deepEqual(received.effects,[]);
+  assert.equal(checked(received.state,{type:'tick',now:30000}).state.phase,'open');
+ }
  let q=ready('client'); q=checked(q,{type:'ack',socket:1,seq:1}).state; assert.equal(q.phase,'closed');
  let x=ready('server'); x=checked(x,{type:'data',socket:1,seq:1,payload:'x'}).state; assert.equal(checked(x,{type:'tick',now:5000}).effects[0].at,1000);
  let alive=ready('client'), peer=ready('server'); for(let i=1;i<=100;i++) { const now=i*16000-1000; let result=checked(alive,{type:'tick',now}); assert.equal(result.state.phase,'open'); assert(result.effects.some(x=>x.kind==='ping')); alive=result.state; peer=checked(peer,{type:'tick',now}).state; peer=checked(peer,{type:'ping',socket:1}).state; result=checked(peer,{type:'tick',now:now+1000}); assert(result.effects.some(x=>x.kind==='pong')); peer=result.state; alive=checked(alive,{type:'tick',now:now+1000}).state; alive=checked(alive,{type:'pong',socket:1}).state; assert.equal(alive.phase,'open'); assert.equal(peer.phase,'open'); }

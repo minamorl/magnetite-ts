@@ -94,7 +94,7 @@ const matrix = {
   ack:{description:'現 socket は protocol_error、旧 socket は無視',run:(s,e)=>socketMatches(s,e.socket)?finish(s,'protocol_error'):idle(s)},
   data:ignore,ping:ignore,pong:ignore, loss:{description:'connect_failed、識別子破棄',run:(s,e)=>socketMatches(s,e.socket)?finish(s,'connect_failed'):idle(s)}, attempt:ignore,resume:ignore,reject:ignore,expiry:ignore,
   close:{description:'closed_by_caller、件数 0',run:terminate}, peerClose:{description:'peer_closed、件数 0',run:(s,e)=>socketMatches(s,e.socket)?finish(s,'peer_closed'):idle(s)},replace:ignore,
-  noIdentifier:{description:'server は新規接続',run:s=>s.role==='server'?out(s,{type:'new_connection'}):idle(s)},tick:{description:'30 秒で connect_failed',run:tick}
+  noIdentifier:{description:'server は新規接続',run:s=>s.role==='server'?out(s,{type:'new_connection'}):idle(s)},tick:{description:'lossAfter（既定 30 秒）で connect_failed',run:tick}
  },
  open: {
   ready:ignore,send:{description:'枠内なら受理し送出、超過は limit',run:send},ack:{description:'累積 ack を解放、最大超過は protocol_error',run:ack},data:{description:'順に配送し ack を予約、重複は破棄',run:data},ping:{description:'現 socket に pong を予約',run:(s,e)=>socketMatches(s,e.socket)?out({...s,pongDue:s.pongDue ?? s.now+1000}):idle(s)},pong:{description:'受信を記録',run:idle},loss:{description:'切断中へ、期限開始',run:loss},attempt:ignore,
@@ -115,7 +115,7 @@ const matrix = {
 } satisfies Record<Phase,Row>;
 export const descriptions: Record<Phase, Record<Event['type'],string>> = Object.fromEntries(Object.entries(matrix).map(([p,row])=>[p,Object.fromEntries(Object.entries(row).map(([e,v])=>[e,v.description]))])) as Record<Phase, Record<Event['type'],string>>;
 export function step(state: State, event: Event): Result {
- if(state.phase==='open' && 'socket' in event && socketMatches(state,event.socket) && ['ack','data','ping','pong','peerClose'].includes(event.type)) state={...state,lastReceived:state.now,pingSent:false};
+ if(state.phase==='open' && 'socket' in event && socketMatches(state,event.socket) && ['ack','data','ping','pong','peerClose','resume','reject'].includes(event.type)) state={...state,lastReceived:state.now,pingSent:false};
  const handler=matrix[state.phase][event.type].run as (s:State,e:Event)=>Result;
  return handler(state,event);
 }

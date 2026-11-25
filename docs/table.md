@@ -19,6 +19,6 @@
 | peerClose | peer_closed、件数 0 | peer_closed | 現在の socket なら peer_closed | 無視 |
 | replace | 無視 | 記録を引き継ぎ replaced 通知 | 無視 | 無視 |
 | noIdentifier | server は新規接続 | server は旧接続を保ち新規接続 | server は別の新規接続、旧記録を維持 | server は新規接続 |
-| tick | 30 秒で connect_failed | ack・pong・ping・無通信期限を判定 | 10 秒または期限を判定 | 時計のみ進む |
+| tick | lossAfter（既定 30 秒）で connect_failed | ack・pong・ping・無通信期限を判定 | 10 秒または期限を判定 | 時計のみ進む |
 
 16 events × 4 states = 64 cells; empty: 0

@@ -6,6 +6,10 @@
 
 表を更新するには `node docs/generate.mjs`。試験は `node test/model.mjs <seed> <count>`。`MUTANT=delivery|notice|retention|terminal|ack|liveness|silent` で故障を注入できる。型検査は TypeScript の `tsc --noEmit --strict --target es2022 --module nodenext --moduleResolution nodenext src/model.ts`。
 
+一度の tick で無通信期限に達した場合は loss のみを出し、予約済みの pong と ack は破棄する。
+
+準備中の期限には開状態と同じ `lossAfter`（既定 30 秒）を使う。
+
 乱数網は方向ごとの FIFO、片側の切断、フレーム・再開要求・返事の喪失、独立した時計、置換、close と終了後の新規接続を扱う。喪失した socket の後続フレームも落とす。出力にはマスごとの回数とゼロを含む。反例は同じ assertion が落ちる範囲で一件ずつ削除し、これ以上一件を削れない列を表示する（大域的な最短列とは限らない）。
 
 限界: 乱数では準備中から始めていない。保証中の欠けなしの完全照合は、一度も通信が途切れていない両端が開の実行に限る。切断後の未完了の通信を必ず再開して配送し切る検査はまだない。通知件数は個々の送信ではなく接頭性を前提に未配送件数と比較する。10 秒と期限の正確な境界は固定例で扱う。乱数と固定例は証明でも実通信の試験でもない。
