@@ -1,6 +1,6 @@
 # 状態遷移表
 
-`node docs/generate.mjs` で src/model.ts の実装済み matrix から生成。各行はイベントを処理する側。出来事は一列で処理する。
+`node docs/generate.mjs` で test/model.ts の実装済み matrix から生成。各行はイベントを処理する側。出来事は一列で処理する。
 
 | 出来事 | 準備中 | 開 | 切断中 | 閉 |
 |---|---|---|---|---|

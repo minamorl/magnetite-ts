@@ -1,16 +1,62 @@
 {
   "name": "@minamorl/magnetite",
   "version": "0.1.0",
-  "private": true,
+  "description": "Reliable WebSocket connection library with zero message loss or duplication across reconnects, resumable sessions, and silent-link detection.",
+  "license": "MIT",
+  "author": "minamorl",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/minamorl/magnetite-ts.git"
+  },
+  "homepage": "https://github.com/minamorl/magnetite-ts#readme",
+  "bugs": {
+    "url": "https://github.com/minamorl/magnetite-ts/issues"
+  },
+  "keywords": [
+    "websocket",
+    "reliable",
+    "reconnect",
+    "resume",
+    "state-machine",
+    "typescript"
+  ],
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
-  "exports": { ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" } },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./core": {
+      "types": "./dist/core.d.ts",
+      "import": "./dist/core.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "sideEffects": false,
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "build": "tsc",
+    "typecheck": "tsc --noEmit && tsc --noEmit --strict --target ES2022 --module NodeNext --moduleResolution NodeNext test/model.ts",
     "test": "npm run build && node --test test/*.test.mjs",
+    "test:model": "node test/model.mjs 1 2000",
     "mutations": "node scripts/mutations.mjs",
-    "mutations:adapter": "node scripts/adapter-mutations.mjs"
+    "mutations:adapter": "node scripts/adapter-mutations.mjs",
+    "pack:check": "npm run build && node scripts/verify-pack.mjs",
+    "prepublishOnly": "npm run typecheck && npm test"
   },
-  "devDependencies": { "typescript": "^5.9.3", "ws": "^8.23.0" }
+  "devDependencies": {
+    "typescript": "^5.9.3",
+    "ws": "^8.23.0"
+  }
 }

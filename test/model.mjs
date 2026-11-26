@@ -1,4 +1,4 @@
-import { initial, step, descriptions, successor } from '../src/model.ts';
+import { initial, step, descriptions, successor } from './model.ts';
 import assert from 'node:assert/strict';
 
 const mutant = process.env.MUTANT || '';
